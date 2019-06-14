@@ -15,7 +15,7 @@ def falling(n, k):
     4
     """
     "*** YOUR CODE HERE ***"
-    res = 1;
+    res = 1 
     if k==0:
         return res
     else:
