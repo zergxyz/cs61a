@@ -48,7 +48,7 @@ with beam.Pipeline(runner='DataflowRunner', options=beam.options.pipeline_option
      | beam.ParDo(WriteRedactedBamFn(gcs_path, alignment_start, new_header_bytes, output_path)))
 '''
 Traceback (most recent call last):
-  File "/home/s004710/MCP%20DeID%20System/PROD/DeIDPipeline/Omics/ls_bam_deid.py", line 12, in <module>
+  File "ls_bam_deid.py", line 12, in <module>
     bam = pysam.AlignmentFile(f, 'rb')
           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   File "pysam/libcalignmentfile.pyx", line 751, in pysam.libcalignmentfile.AlignmentFile.__cinit__
