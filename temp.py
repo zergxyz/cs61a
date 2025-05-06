@@ -44,3 +44,24 @@ except Exception as e:
 finally:
     print("Stopping Spark session.")
     spark.stop()
+
+
+'''
+#!/bin/bash
+# Copy JAR to Spark jars directory
+gsutil cp gs://my-bucket/spark-nlp/spark-nlp_2.12-6.0.0.jar $SPARK_HOME/jars/
+# Copy wheel to /tmp
+gsutil cp gs://my-bucket/spark-nlp/spark_nlp-6.0.0-py3-none-any.whl /tmp/
+# Install the wheel
+pip install /tmp/spark_nlp-6.0.0-py3-none-any.whl
+
+
+gcloud dataproc clusters create my-cluster \
+--region=us-central1 \
+--zone=us-central1-a \
+--image-version=2.0-debian10 \
+--master-machine-type=n1-standard-4 \
+--worker-machine-type=n1-standard-4 \
+--num-workers=2 \
+--initialization-actions=gs://my-offline-packages/scripts/install_sparknlp.sh
+'''
