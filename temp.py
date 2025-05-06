@@ -1,51 +1,46 @@
-import pysam
-from apache_beam.io import gcsio
-import apache_beam as beam
-from io import BytesIO
+from pyspark.sql import SparkSession
+import sparknlp 
 
-# Input and output paths
-gcs_path = 'gs://your-bucket/path/to/original.bam'
-output_path = 'gs://your-bucket/path/to/modified.bam'
+print("Attempting to start Spark session manually...")
 
-# Step 1 & 3: Read and modify header, get alignment start
-with gcsio.GcsIO().open(gcs_path, 'rb') as f:
-    bam = pysam.AlignmentFile(f, 'rb')
-    header = bam.header
-    alignment_start = f.tell()
-    header_dict = header.to_dict()
-    # Redact metadata (example)
-    if 'PG' in header_dict:
-        del header_dict['PG']
-    new_header = pysam.AlignmentHeader.from_dict(header_dict)
-    header_buf = BytesIO()
-    temp_bam = pysam.AlignmentFile(header_buf, 'wb', header=new_header)
-    temp_bam.close()
-    new_header_bytes = header_buf.getvalue()
+# Manual session creation is safer for offline use with --jars / --py-files
+# It avoids sparknlp.start() attempting downloads.
+spark = SparkSession.builder \
+   .appName("SparkNLP_OSS_Hello_World") \
+   .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer") \
+   .config("spark.kryoserializer.buffer.max", "1000M") \
+   .config("spark.jars.packages", "") \
+   .config("spark.jars.ivy", "/tmp/.ivy2/") \
+   .getOrCreate()
+    #.config("spark.jars", "gs://<your-bucket>/dependencies/jars/spark-nlp-assembly-5.5.1.jar") # Redundant if using --jars, but can be explicit
+   
 
-# Step 5: Beam pipeline to write new BAM file
-class WriteRedactedBamFn(beam.DoFn):
-    def __init__(self, original_path, alignment_start, new_header_bytes, output_path):
-        self.original_path = original_path
-        self.alignment_start = alignment_start
-        self.header_bytes = new_header_bytes
-        self.output_path = output_path
+print("Spark session created.")
+print(f"Spark NLP version: {sparknlp.version()}")
+print(f"Apache Spark version: {spark.version}")
+print(f"Java version: {spark.sparkContext.getConf().get('spark.driver.extraJavaOptions', '')}") # Check Java version if needed
 
-    def process(self, element):
-        with gcsio.GcsIO().open(self.output_path, 'wb') as out_f:
-            out_f.write(self.header_bytes)
-            with gcsio.GcsIO().open(self.original_path, 'rb') as in_f:
-                in_f.seek(self.alignment_start)
-                while True:
-                    chunk = in_f.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    out_f.write(chunk)
-        yield self.output_path
+# Simple Spark NLP pipeline (DocumentAssembler + SentenceDetector)
+# Avoids models requiring downloads for this basic test.
+from sparknlp.base import DocumentAssembler
+from sparknlp.annotator import SentenceDetector
+from pyspark.ml import Pipeline
 
-with beam.Pipeline(runner='DataflowRunner', options=beam.options.pipeline_options.PipelineOptions()) as p:
-    (p 
-     | beam.Create([None])
-     | beam.ParDo(WriteRedactedBamFn(gcs_path, alignment_start, new_header_bytes, output_path)))
-'''
-comments here 
-'''
+try:
+    documentAssembler = DocumentAssembler().setInputCol("text").setOutputCol("document")
+    sentenceDetector = SentenceDetector().setInputCols(["document"]).setOutputCol("sentence")
+    pipeline = Pipeline(stages=[documentAssembler, sentenceDetector])
+
+    data = spark.createDataFrame([["hello, world"]]).toDF("text")
+    result = pipeline.fit(data).transform(data)
+
+    print("Pipeline worked! Sample output:")
+    result.select("sentence.result").show(truncate=False)
+
+except Exception as e:
+    print(f"Error during Spark NLP pipeline execution: {e}")
+    # Add more detailed error logging if necessary
+
+finally:
+    print("Stopping Spark session.")
+    spark.stop()
