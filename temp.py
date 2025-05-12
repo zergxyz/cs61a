@@ -1,67 +1,144 @@
 from pyspark.sql import SparkSession
-import sparknlp 
+import sparknlp
+import sparknlp_jsl
+from sparknlp.base import *
+from sparknlp.annotator import *
+from sparknlp_jsl.annotator import *
+from pyspark.ml import Pipeline, PipelineModel
 
-print("Attempting to start Spark session manually...")
+# Start SparkSession with JSL
+# spark = sparknlp_jsl.start(SECRET) # Replace SECRET with your JSL secret
 
-# Manual session creation is safer for offline use with --jars / --py-files
-# It avoids sparknlp.start() attempting downloads.
-spark = SparkSession.builder \
-   .appName("SparkNLP_OSS_Hello_World") \
-   .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer") \
-   .config("spark.kryoserializer.buffer.max", "1000M") \
-   .config("spark.jars.packages", "") \
-   .config("spark.jars.ivy", "/tmp/.ivy2/") \
-   .getOrCreate()
-    #.config("spark.jars", "gs://<your-bucket>/dependencies/jars/spark-nlp-assembly-5.5.1.jar") # Redundant if using --jars, but can be explicit
-   
+# 1. Load Data from BigQuery
+# Assuming your DataFrame is loaded into 'bq_df' and has a column named 'text_column_name'
+# Example:
+# bq_df = spark.read.format("bigquery") \
+# .option("table", "your_project.your_dataset.your_table") \
+# .load()
+#
+# For demonstration, let's create a sample DataFrame:
+data = [("Patient John Doe, age 45, visited Dr. Smith at General Hospital on 01/15/2023.",),
+        ("Record for Jane Roe, 60 years old, seen by Dr. Emily White at City Clinic, MRN 12345.",)]
+bq_df = spark.createDataFrame(data).toDF("text_column_name")
 
-print("Spark session created.")
-print(f"Spark NLP version: {sparknlp.version()}")
-print(f"Apache Spark version: {spark.version}")
-print(f"Java version: {spark.sparkContext.getConf().get('spark.driver.extraJavaOptions', '')}") # Check Java version if needed
+# 2. Build or Load De-identification Pipeline
 
-# Simple Spark NLP pipeline (DocumentAssembler + SentenceDetector)
-# Avoids models requiring downloads for this basic test.
-from sparknlp.base import DocumentAssembler
-from sparknlp.annotator import SentenceDetector
-from pyspark.ml import Pipeline
+# Option A: Using a Pretrained Clinical De-identification Pipeline
+# Check John Snow Labs documentation for the latest available pretrained pipelines
+# For example: pretrained_pipeline = PretrainedPipeline("clinical_deidentification", "en", "clinical/models")
+#
+# If using a pretrained pipeline directly with .transform(), it handles the internal stages.
+# However, for customizing the DeIdentification annotator within it,
+# you might need to unpack and repack or build a custom one.
+# A more common approach for customization is building the pipeline manually:
 
-try:
-    documentAssembler = DocumentAssembler().setInputCol("text").setOutputCol("document")
-    sentenceDetector = SentenceDetector().setInputCols(["document"]).setOutputCol("sentence")
-    pipeline = Pipeline(stages=[documentAssembler, sentenceDetector])
+# Option B: Building a Custom Pipeline
+document_assembler = DocumentAssembler() \
+    .setInputCol("text_column_name") \
+    .setOutputCol("document")
 
-    data = spark.createDataFrame([["hello, world"]]).toDF("text")
-    result = pipeline.fit(data).transform(data)
+sentence_detector = SentenceDetector() \
+    .setInputCols(["document"]) \
+    .setOutputCol("sentence")
 
-    print("Pipeline worked! Sample output:")
-    result.select("sentence.result").show(truncate=False)
+tokenizer = Tokenizer() \
+    .setInputCols(["sentence"]) \
+    .setOutputCol("token")
 
-except Exception as e:
-    print(f"Error during Spark NLP pipeline execution: {e}")
-    # Add more detailed error logging if necessary
+word_embeddings = WordEmbeddingsModel.pretrained("embeddings_clinical", "en", "clinical/models") \
+    .setInputCols(["sentence", "token"]) \
+    .setOutputCol("embeddings")
 
-finally:
-    print("Stopping Spark session.")
-    spark.stop()
+# Use a clinical NER model suitable for de-identification
+# (e.g., ner_deid_generic_augmented, ner_deid_subentity)
+clinical_ner = MedicalNerModel.pretrained("ner_deid_generic_augmented", "en", "clinical/models") \
+    .setInputCols(["sentence", "token", "embeddings"]) \
+    .setOutputCol("ner")
 
+ner_converter = NerConverterInternal() \
+    .setInputCols(["sentence", "token", "ner"]) \
+    .setOutputCol("ner_chunk")
 
-'''
-#!/bin/bash
-# Copy JAR to Spark jars directory
-gsutil cp gs://my-bucket/spark-nlp/spark-nlp_2.12-6.0.0.jar $SPARK_HOME/jars/
-# Copy wheel to /tmp
-gsutil cp gs://my-bucket/spark-nlp/spark_nlp-6.0.0-py3-none-any.whl /tmp/
-# Install the wheel
-pip install /tmp/spark_nlp-6.0.0-py3-none-any.whl
+# DeIdentification Annotator
+# Configure for fixed character masking
+de_identification = DeIdentification() \
+    .setInputCols(["sentence", "token", "ner_chunk"]) \
+    .setOutputCol("deidentified_text") \
+    .setMode("mask") \
+    .setMaskingPolicy("fixed_length_chars") \
+    .setFixedMaskLength(4)  # Mask with 4 asterisks (****) for each entity. [1, 2]
+    # You can also use .setSameLengthChars(True) to mask with the same number of asterisks as the original entity length.
+    # And .setMaskingChars(['*']) to specify the character, though fixed_length_chars often defaults to asterisks.
 
+# Define the pipeline
+pipeline = Pipeline(stages=[
+    document_assembler,
+    sentence_detector,
+    tokenizer,
+    word_embeddings,
+    clinical_ner,
+    ner_converter,
+    de_identification
+])
 
-gcloud dataproc clusters create my-cluster \
---region=us-central1 \
---zone=us-central1-a \
---image-version=2.0-debian10 \
---master-machine-type=n1-standard-4 \
---worker-machine-type=n1-standard-4 \
---num-workers=2 \
---initialization-actions=gs://my-offline-packages/scripts/install_sparknlp.sh
-'''
+# 3. Fit and Transform Data
+# Since all components are pretrained (or DocumentAssembler, SentenceDetector etc don't require training in this context for transform)
+# we can directly use transform for a pipeline with pretrained components.
+# If you had a trainable component that wasn't already a PretrainedModel, you'd .fit() first.
+# model = pipeline.fit(bq_df) # Not strictly necessary if all components are pretrained or don't require fitting on this specific data.
+# deid_df = model.transform(bq_df)
+
+# For pipelines composed of pretrained models and annotators like DocumentAssembler,
+# you can often directly use a LightPipeline for smaller datasets or transform for larger ones.
+# Given you're working with a "large dataframe", .transform() is appropriate.
+# A pipeline model is created implicitly when you call fit, or you can create one with pretrained stages.
+
+# It's good practice to create a PipelineModel
+empty_df = spark.createDataFrame([[""]]).toDF("text_column_name") # Create an empty DataFrame to fit the pipeline (some annotators might expect this)
+pipeline_model = pipeline.fit(empty_df) # Fitting on an empty DF for pretrained components essentially finalizes the pipeline structure.
+
+deid_df = pipeline_model.transform(bq_df)
+
+# 4. Select Output
+# The 'deidentified_text' column will contain an array of AnnotatorType("document")
+# Usually, the actual masked string is in the 'result' field of this annotation.
+# You might need to explode or select the appropriate field.
+
+# The DeIdentification annotator by default outputs a column with the deidentified text.
+# The output column "deidentified_text" will contain the modified text directly at the row level.
+# Let's check the schema to be sure
+print("Schema of the de-identified DataFrame:")
+deid_df.printSchema()
+
+print("De-identified results:")
+deid_df.select("text_column_name", "deidentified_text.result").show(truncate=False)
+
+# If deidentified_text is an array (it usually is, representing the document),
+# and you want the full text, you might need to access its elements.
+# Often, the DeIdentification annotator when set to mask will directly produce a column
+# where each row contains the full deidentified text.
+
+# If the output in 'deidentified_text' is an array of annotation objects,
+# you might need to extract the actual text. For DeIdentification, the primary output
+# in the specified output column ('deidentified_text' here) is typically the masked text itself at the document level.
+
+# Let's refine the selection based on typical DeIdentification output:
+# The 'deidentified_text' column from the DeIdentification annotator usually stores
+# the processed text where entities are masked.
+# It outputs an array of annotations, but when it's the final stage for text processing,
+# often the result is what you need.
+# If 'deidentified_text' is an array of structures, you might need to explode or extract.
+# However, often it's simpler:
+result_df = deid_df.select("text_column_name", "deidentified_text.result") \
+                   .withColumnRenamed("result", "masked_text_array")
+
+# The 'result' from DeIdentification is usually an array with one element (the full processed document).
+# So, we take the first element.
+from pyspark.sql.functions import col
+final_df = result_df.select("text_column_name", col("masked_text_array")[0].alias("masked_clinical_note"))
+
+print("Final de-identified notes with fixed character masking:")
+final_df.show(truncate=False)
+
+# Stop the SparkSession
+# spark.stop()
