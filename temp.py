@@ -142,3 +142,52 @@ final_df.show(truncate=False)
 
 # Stop the SparkSession
 # spark.stop()
+
+
+
+
+from pyspark.sql import SparkSession
+import sparknlp
+import sparknlp_jsl
+
+# Assume SparkSession is obtained (Dataproc Serverless provides one)
+spark = SparkSession.builder.appName("JSL_Dataproc_GCS_Secret").getOrCreate()
+
+# --- Configuration for GCS Secret File ---
+gcs_secret_file_path = "gs://your-secure-bucket/secrets/jsl_secret.txt" # CHANGE THIS
+# ---------------------------------------
+
+jsl_secret_value = None
+try:
+    print(f"Attempting to read JSL secret from GCS path: {gcs_secret_file_path}")
+    # Read the file content. Spark can read GCS paths directly.
+    # RDD an option for small files, or use Hadoop fs API for more control
+    # For a small secret file, reading it as an RDD and collecting is straightforward.
+    secret_rdd = spark.sparkContext.textFile(gcs_secret_file_path)
+    jsl_secret_value = secret_rdd.first() # Assumes secret is on the first line
+
+    if not jsl_secret_value or jsl_secret_value.strip() == "":
+        raise ValueError("Secret file was empty or not read correctly.")
+
+    jsl_secret_value = jsl_secret_value.strip() # Remove any leading/trailing whitespace
+    print("JSL secret fetched successfully from GCS.")
+
+    # Initialize Spark NLP JSL with the fetched secret
+    spark = sparknlp_jsl.start(secret=jsl_secret_value)
+    print("Spark NLP JSL started successfully using secret from GCS file.")
+
+except Exception as e:
+    # Be careful not to log the actual secret value in error messages here!
+    print(f"Error reading secret from GCS or starting Spark NLP JSL: {e}")
+    # If jsl_secret_value was populated, DO NOT log it.
+    spark.stop()
+    raise
+
+# ... rest of your Spark NLP JSL code ...
+
+# Example usage:
+# data = [("Patient John Doe visited Dr. Smith.",)]
+# df = spark.createDataFrame(data).toDF("text")
+# ... process df using JSL pipeline ...
+
+# spark.stop()
