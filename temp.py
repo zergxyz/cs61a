@@ -191,3 +191,28 @@ except Exception as e:
 # ... process df using JSL pipeline ...
 
 # spark.stop()
+
+'''
+I need some architecture guidance regarding to a data dictionary development work. Here is the background. My team is supporting the clinical data de-identification work and we have several components: 1 part is the vender supported de-identification. The vendor will provide us a data schema dictionary to define each involved clinical data topic and what kind of transformation it will apply for each data elements. The sample data dictionary will be like this:
+Table Name|Field Name|Field Type|Description|Example|Include|Tags|Transformation|Target Deployment|Group_Name|Flag|Table Reference|Field Reference|Is Primary?|Unique|Risk Status|Risk Type|Transformation1|Change Notes|EndUserVisible|Date Update|Last Updated By|Brad Question|Extra_Field1|Extra_Field2|Extra_Field3
+DIM_APPOINTMENT_INDICATION_BRIDGE|ROW_SOURCE_ID|BIGINT 8|A unique identifier of the source system for this record|(Key value)|Yes|||Q1 2021||VALIDATION_ID_FIELD|||||Low|-|No change||Yes|2024-11-18|Brad Malin||||
+FACT_ADMIT_DISCHARGE_TRANSFER_LOCATION|ROW_SOURCE_ID|BIGINT 8|A unique identifier of the source system for this record|32974|Yes|||Q1 2021||VALIDATION_ID_FIELD|||||Low|-|No change||Yes|2024-11-18|Brad Malin||||
+DIM_ADMIT_DISCHARGE_TRANSFER_EVENT_TYPE|EVENT_TYPE_CODE|VARCHAR 50|The code of the EVENT_TYPE|ERRG|No|||Q1 2020|||||||||Not provided to End User|||2024-11-18|Brad Malin||||
+FACT_ALLERGIES|ROW_SOURCE_ID|BIGINT 8|A unique identifier of the source system for this record|(Key value)|Yes|||Q1 2021||VALIDATION_ID_FIELD|||||Low|-|No change||Yes|2024-11-18|Brad Malin||||
+
+You can tell the above sample is defined in a pipe delimited file with table name and its column name alone with the corresponding transformations. The vendor software will do the de-id processing based on this data dictionary definition and our quality control work (QC) will also check those defined transformations to make sure the de-identification work was conducted correctly.
+
+The second component is our in-house developed de-identification pipeline and we are supporting different data modality like DICOM. We are using similar data definition dictionary and example as followed:
+Tag|Names|Keyword|Type|VR|VM|III Tags|Present in Mayo Data|Basic Profile for Deid|Transformation|Query to Mayo|Risk Type|Risk Status|Transformation1|Date Last Reviewed|Last Reviewed By|Open or Closed to Discussion|Safe Harbor Redaction
+(0008, 0001)|Length to End|LengthToEnd||UL|1|FALSE|TRUE||NO CHANGE||-|Low|No change|3/20/2023|Brad Malin|Closed|FALSE
+(0008, 0005)|Specific Character Set|SpecificCharacterSet|1C|CS|1-n|FALSE|TRUE||NO CHANGE||-|Low|No change|3/20/2023|Brad Malin|Closed|FALSE
+(0008, 0008)|Image Type|ImageType|1|CS|2-n|FALSE|TRUE||NO CHANGE||-|Low|No change|3/20/2023|Brad Malin|Closed|FALSE
+(0008, 0012)|Instance Creation Date|InstanceCreationDate|3|DA|1|FALSE|TRUE||RELATIVE_DATE||Date|Moderate|Random shift|3/20/2023|Brad Malin|Closed|TRUE
+
+You can see we define each DICOM tag in the pipe-delimited dictionary and provide transformation for each tag. We also add safe-harbor flag to each tag in case we want to do safe-harbor based de-id work rather than certified obfuscation based de-id work.
+
+Now we need to figure out a way to define a comprehensive and unified data dictionary to make sure we can support both vendor based and in-house developed de-id work. My goal is to also enhancing the dictionary definition to make sure we can keep tracking of the versioning changes if something happened in a specific version. For example, a corresponding history table can be established to track those changes. The best situation is every time if we have a new data extraction plan we will start working on the data dictionary definition and add those contents to this new dictionary table and it wil guide us to do the extraction, de-id and QC work. We will have a unified and consistent plance to check all the data elements related definition and de-id trasnformation. Please use the best practice of data architecting and software engineering principal  to help me  design a scalable and fault tolerance solution to build and manage this comprehensive data dictionary system. I need this one works with BigQuery and cloud storage files. Share with me the detailed solution once you are ready.
+'''
+
+
+
